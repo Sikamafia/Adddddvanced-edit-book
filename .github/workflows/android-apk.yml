@@ -1,0 +1,91 @@
+name: Build Android release APK (arm64)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.0.12077973
+      BUILD_TOOLS: 35.0.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: false
+          packages: ''
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Install NDK and build tools
+        run: sdkmanager "ndk;${NDK_VERSION}" "platforms;android-35" "build-tools;${BUILD_TOOLS}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm install
+      - run: npm run vendor
+      - run: npx tauri icon app-icon.png
+      - run: npx tauri android init --ci
+
+      - name: Build release APK (arm64 only)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+        run: npx tauri android build --apk --target aarch64
+
+      - name: Prepare keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS_SECRET: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.jks
+            echo "KS_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
+            echo "KS_ALIAS=$KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -v -keystore release.jks -alias watermark \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android123 -keypass android123 \
+              -dname "CN=Watermark Offline"
+            echo "KS_PASS=android123" >> "$GITHUB_ENV"
+            echo "KS_ALIAS=watermark" >> "$GITHUB_ENV"
+          fi
+
+      - name: Align and sign APK
+        run: |
+          BT="$ANDROID_HOME/build-tools/${BUILD_TOOLS}"
+          UNSIGNED=$(find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" | head -n 1)
+          echo "Unsigned: $UNSIGNED"
+          "$BT/zipalign" -p -f 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign --ks release.jks \
+            --ks-key-alias "$KS_ALIAS" \
+            --ks-pass "pass:$KS_PASS" \
+            --key-pass "pass:$KS_PASS" \
+            --out watermark-offline-arm64-release.apk aligned.apk
+          "$BT/apksigner" verify watermark-offline-arm64-release.apk
+          ls -lh watermark-offline-arm64-release.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: watermark-offline-arm64-release-apk
+          path: watermark-offline-arm64-release.apk

@@ -1,0 +1,20 @@
+{
+  "name": "watermark-rust-android",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "vendor": "node scripts/prepare-vendor.mjs",
+    "icons": "tauri icon app-icon.png",
+    "tauri": "tauri",
+    "android:init": "tauri android init",
+    "android:release": "tauri android build --apk --target aarch64"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "3.11.174"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
